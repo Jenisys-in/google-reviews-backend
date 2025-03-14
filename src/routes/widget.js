@@ -2,7 +2,7 @@ const express = require("express");
 const db = require("../config/db");
 const { fetchGoogleReviews } = require("../config/googleAPI");
 const cron = require('node-cron');
-
+const axios = require('axios');
 const router = express.Router();
 
 
@@ -37,7 +37,7 @@ router.get("/fetch/:widget_id", async (req, res) => {
         }
 
         // Fetch reviews for the widget
-        const reviews = await pool.query("SELECT * FROM google_reviews WHERE widget_id = ?", [widget_id]);
+        const reviews = await db.query("SELECT * FROM google_reviews WHERE widget_id = ?", [widget_id]);
 
         console.log(`✅ Found ${reviews.length} reviews.`);
 
@@ -89,7 +89,7 @@ router.get("/fetch-google-reviews/:widget_id", async (req, res) => {
 
         // Store reviews in the database
         for (let review of reviews) {
-            await pool.query(
+            await db.query(
                 "INSERT INTO google_reviews (widget_id, author_name, rating, text, relative_time_description) VALUES (?, ?, ?, ?, ?)",
                 [review.widget_id, review.author_name, review.rating, review.text, review.relative_time_description]
             );
@@ -109,7 +109,7 @@ router.get("/user-widgets/:user_id", async (req, res) => {
 
         console.log(`🔍 Fetching all widgets for User ID: ${user_id}`);
 
-        const widgets = await pool.query("SELECT * FROM widgets WHERE user_id = ?", [user_id]);
+        const widgets = await db.query("SELECT * FROM widgets WHERE user_id = ?", [user_id]);
 
         if (widgets.length === 0) {
             return res.status(404).json({ error: "❌ No widgets found for this user." });
@@ -123,6 +123,91 @@ router.get("/user-widgets/:user_id", async (req, res) => {
     }
 });
 
+// Added a new endpoint to update widget settings
+router.post("/update-settings/:widget_id", async (req, res) => {
+    try {
+        const { widget_id } = req.params;
+        const { layout_type } = req.body;
+        
+        if (!['vertical', 'horizontal'].includes(layout_type)) {
+            return res.status(400).json({ error: "❌ Invalid layout type. Must be 'vertical' or 'horizontal'." });
+        }
+
+        // Get the user_id for this widget
+        const [widget] = await db.query("SELECT user_id FROM widgets WHERE id = ?", [widget_id]);
+        
+        if (!widget) {
+            return res.status(404).json({ error: "❌ Widget not found." });
+        }
+        
+        // Check if user has an active subscription - using the actual table structure
+        const subscription = await db.query(
+            "SELECT * FROM subscriptions WHERE user_id = ?",
+            [widget.user_id]
+        );
+        
+        if (!subscription.length) {
+            return res.status(403).json({ 
+                error: "❌ Active subscription required to change layout settings.",
+                message: "Please subscribe to access layout customization features."
+            });
+        }
+
+        await db.query(
+            "UPDATE widgets SET layout_type = ? WHERE id = ?",
+            [layout_type, widget_id]
+        );
+
+        const widgetEmbedCode = `<script src="${process.env.API_BASE_URL}/api/widget/reviews.js?widget_id=${widget_id}"></script>`;
+
+        res.json({ 
+            message: "✅ Widget settings updated successfully", 
+            embed_code: widgetEmbedCode 
+        });
+    } catch (err) {
+        console.error("❌ Error updating widget settings:", err);
+        res.status(500).json({ error: "Failed to update widget settings." });
+    }
+});
+
+// Added a dashboard endpoint
+router.get("/dashboard/:user_id", async (req, res) => {
+    try {
+        const { user_id } = req.params;
+        
+        const widgets = await db.query(`
+            SELECT 
+                w.*,
+                COUNT(gr.id) AS total_reviews,
+                AVG(gr.rating) AS average_rating
+            FROM 
+                widgets w
+            LEFT JOIN 
+                google_reviews gr ON w.id = gr.widget_id
+            WHERE 
+                w.user_id = ?
+            GROUP BY 
+                w.id
+        `, [user_id]);
+        
+        if (widgets.length === 0) {
+            return res.json({ widgets: [] });
+        }
+        
+        const widgetsWithEmbedCode = widgets.map(widget => {
+            const embedCode = `<script src="${process.env.API_BASE_URL}/api/widget/reviews.js?widget_id=${widget.id}"></script>`;
+            return {
+                ...widget,
+                embed_code: embedCode
+            };
+        });
+        
+        res.json({ widgets: widgetsWithEmbedCode });
+    } catch (err) {
+        console.error("❌ Error fetching widgets dashboard:", err);
+        res.status(500).json({ error: "Failed to fetch widgets dashboard." });
+    }
+});
 
 router.get('/reviews.js', async (req, res) => {
     try {
@@ -130,63 +215,84 @@ router.get('/reviews.js', async (req, res) => {
         if (!widget_id) return res.status(400).json({ error: 'Missing widget_id' });
 
 
- const referer = req.get('Referer') || "";
-const isClientWebsite = referer.includes("toprecenzie.sk"); // Change to actual domain
+        const referer = req.get('Referer') || "";
+        const isClientWebsite = referer.includes("toprecenzie.sk"); // Change to actual domain
 
-console.log("Referer:", referer, "→ isClientWebsite:", isClientWebsite);
+        console.log("Referer:", referer, "→ isClientWebsite:", isClientWebsite);
 
 
         // Fetch widget details from database
         const [widget] = await db.query('SELECT * FROM widgets WHERE id = ?', [widget_id]);
         if (!widget) return res.status(404).json({ error: 'Widget not found' });
 
+        // Check if user has an active subscription
+        const subscription = await db.query(
+            "SELECT * FROM subscriptions WHERE user_id = ? AND status = 'active' AND expires_at > NOW()",
+            [widget.user_id]
+        );
+        
+        const hasActiveSubscription = subscription.length > 0;
+        
+        const layout_type = widget.layout_type || 'vertical'; 
+        const initialView = '${layout_type}';
+
         const place_id = widget.business_id; // Retrieve Google Place ID from database
 
-// ✅ Generate the correct Google Review Link dynamically
+        // ✅ Generate the correct Google Review Link dynamically
         const googleReviewLink = `https://search.google.com/local/writereview?placeid=${place_id}`;
 
         // Google Places API Request (Slovak Language Forced)
         const googleAPIKey = process.env.GOOGLE_API_KEY;
         const googleReviewsURL = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=reviews,rating,user_ratings_total&key=${googleAPIKey}&language=sk`;
 
+        // Track API request
+        await db.query(
+            "INSERT INTO api_requests (user_id, widget_id, request_type) VALUES (?, ?, ?)",
+            [widget.user_id, widget_id, "google_places_details"]
+        );
+
         const response = await axios.get(googleReviewsURL);
         const data = response.data;
 
-
+        // Track API response size
+        const responseSize = JSON.stringify(data).length;
+        await db.query(
+            "UPDATE api_requests SET response_size = ?, status = 'completed' WHERE user_id = ? AND widget_id = ? ORDER BY created_at DESC LIMIT 1",
+            [responseSize, widget.user_id, widget_id]
+        );
 
         if (!data.result || !data.result.reviews) {
             return res.status(500).json({ error: 'No reviews found for this place' });
-return res.status(500).json({ error: 'No reviews found for this place' });
         }
 
         const reviews = data.result.reviews ? data.result.reviews.filter(review => review.text.trim() !== "") : [];
         const sortedReviews = reviews.sort((a, b) => b.rating - a.rating);
 
- const overallRating = data.result.rating;
+        const overallRating = data.result.rating;
         const totalReviews = data.result.user_ratings_total || 0;
 
-console.log("✅ Reviews fetched:", reviews.length, "reviews found.");
+        console.log("✅ Reviews fetched:", reviews.length, "reviews found.");
 
 
-for (const review of reviews) {
-const reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
-console.log("📌 Inserting review:", review.author_name);
-    await db.query(
-        `INSERT INTO google_reviews (widget_id, author_name, rating, text, created_at, profile_photo_url)
-         SELECT ?, ?, ?, ?, ?, ? FROM DUAL
-         WHERE NOT EXISTS (
-            SELECT 1 FROM google_reviews
-            WHERE widget_id = ?
-            AND author_name = ?
-            AND created_at = ?
+        for (const review of reviews) {
+            const reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+            console.log("📌 Inserting review:", review.author_name);
+            await db.query(
+                `INSERT INTO google_reviews (widget_id, author_name, rating, text, created_at, profile_photo_url)
+                 SELECT ?, ?, ?, ?, ?, ? FROM DUAL
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM google_reviews
+                    WHERE widget_id = ?
+                    AND author_name = ?
+                    AND created_at = ?
                      )`,
-        [
-            widget_id, review.author_name, review.rating, review.text, reviewDate,
-            review.profile_photo_url || 'https://via.placeholder.com/50', // ✅ Default profile image if missing
-            widget_id, review.author_name, reviewDate
-        ]
-    );
-}
+                [
+                    widget_id, review.author_name, review.rating, review.text, reviewDate,
+                    review.profile_photo_url || 'https://via.placeholder.com/50', // ✅ Default profile image if missing
+                    widget_id, review.author_name, reviewDate
+                ]
+            );
+        }
 
 
 
@@ -245,6 +351,25 @@ const googleReviewLink = "${googleReviewLink}";
                 window.loadMoreReviews = function() {
                     document.querySelectorAll(".review.hidden").forEach(review => review.classList.remove("hidden"));
                     document.querySelector(".load-more-btn").style.display = "none";
+                };
+
+                // Add switchTab function
+                window.switchTab = function(tabName) {
+                    if (${JSON.stringify(hasActiveSubscription)}) {
+                        if (tabName === 'vertical') {
+                            document.getElementById('vertical-reviews').style.display = 'flex';
+                            document.getElementById('horizontal-reviews').style.display = 'none';
+                            document.getElementById('tab-vertical').classList.add('active');
+                            document.getElementById('tab-horizontal').classList.remove('active');
+                        } else {
+                            document.getElementById('vertical-reviews').style.display = 'none';
+                            document.getElementById('horizontal-reviews').style.display = 'flex';
+                            document.getElementById('tab-vertical').classList.remove('active');
+                            document.getElementById('tab-horizontal').classList.add('active');
+                        }
+                    } else {
+                        console.log('Subscription required to switch tabs');
+                    }
                 };
 
                 let container = document.createElement('div');
@@ -549,7 +674,7 @@ function openGoogleReview(event) {
 
                     <!-- Tab Navigation -->
 
-       \${isClientWebsite ? \`
+       \${isClientWebsite && hasActiveSubscription ? \`
         <div class="tabs">
             <button id="tab-vertical" class="tab active" onclick="switchTab('vertical')">Comments Vertically</button>
             <button id="tab-horizontal" class="tab" onclick="switchTab('horizontal')">Comments Horizontally</button>
@@ -572,7 +697,7 @@ function openGoogleReview(event) {
                     </div>
 
  <!-- Horizontal Reviews Section -->
-       \${isClientWebsite ? \`
+       \${isClientWebsite && hasActiveSubscription ? \`
         <div id="horizontal-reviews" class="horizontal-reviews-container">
                         \${reviewsData.map((review, index) => \`
                             <div class="review \${index >= 3 ? 'hidden' : ''}">
@@ -601,30 +726,12 @@ function openGoogleReview(event) {
 
                 document.currentScript.parentNode.insertBefore(container, document.currentScript);
 
-
-
-
-
-// ✅ Attach switchTab to window if on Client's Website
-                if (isClientWebsite) {
-                    window.switchTab = function(view) {
-                        const verticalReviews = document.getElementById('vertical-reviews');
-                        const horizontalReviews = document.getElementById('horizontal-reviews');
-
-                        if (verticalReviews && horizontalReviews) {
-                            verticalReviews.style.display = (view === 'vertical') ? 'block' : 'none';
-                            horizontalReviews.style.display = (view === 'horizontal') ? 'flex' : 'none';
-                        }
-
-                        document.getElementById('tab-vertical')?.classList.toggle('active', view === 'vertical');
-                        document.getElementById('tab-horizontal')?.classList.toggle('active', view === 'horizontal');
-                    };
-                       document.getElementById("tab-vertical").addEventListener("click", () => switchTab("vertical"));
-                    document.getElementById("tab-horizontal").addEventListener("click", () => switchTab("horizontal"));
+                // ✅ Attach switchTab to window if on Client's Website and has active subscription
+                if (isClientWebsite && ${JSON.stringify(hasActiveSubscription)}) {
+                    window.switchTab('${layout_type}');
+                    document.getElementById('tab-vertical')?.classList.toggle('active', '${layout_type}' === 'vertical');
+                    document.getElementById('tab-horizontal')?.classList.toggle('active', '${layout_type}' === 'horizontal');
                 }
-
-
-
             })();
         `;
 
@@ -638,31 +745,62 @@ function openGoogleReview(event) {
 
 
 
-cron.schedule('0 2 * * 1', async () => {
-    console.log("🔄 Fetching latest reviews from Google Places API...");
+cron.schedule('0 2 * * 1', async () => { // This runs at 2 AM every Monday
+    console.log("🔄 Weekly review update: Fetching latest reviews from Google Places API...");
 
     try {
-        const businesses = await db.query("SELECT widget_id, business_id FROM widgets");
+        // Get all widgets
+        const widgets = await db.query("SELECT id, business_id, user_id FROM widgets");
 
-        for (const business of businesses) {
-            const place_id = business.business_id;
-            const widget_id = business.widget_id;
+        for (const widget of widgets) {
+            const place_id = widget.business_id;
+            const widget_id = widget.id;
+            const user_id = widget.user_id;
 
+            console.log(`🔍 Processing widget ID: ${widget_id} for user ID: ${user_id}`);
+            
+            // Create an API request record
+            await db.query(
+                "INSERT INTO api_requests (user_id, widget_id, request_type) VALUES (?, ?, ?)",
+                [user_id, widget_id, "google_places_details"]
+            );
+
+            // Fetch reviews from Google API
             const googleReviewsURL = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=reviews,rating,user_ratings_total&key=${process.env.GOOGLE_API_KEY}&language=sk`;
 
             const response = await axios.get(googleReviewsURL);
             const data = response.data;
 
+            // Track API response size
+            const responseSize = JSON.stringify(data).length;
+            
+            // Update the request record with response size
+            await db.query(
+                "UPDATE api_requests SET response_size = ?, status = 'completed' WHERE user_id = ? AND widget_id = ? ORDER BY created_at DESC LIMIT 1",
+                [responseSize, user_id, widget_id]
+            );
+
             if (data.result && data.result.reviews) {
+                console.log(`✅ Found ${data.result.reviews.length} reviews for widget ID: ${widget_id}`);
+                
+                // Loop through and insert/update reviews
                 for (const review of data.result.reviews) {
+                    const reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+                    
                     await db.query(
-                        `INSERT INTO google_reviews (widget_id, author_name, rating, text, time, profile_photo_url)
-                         VALUES (?, ?, ?, ?, ?, ?)
-                         ON DUPLICATE KEY UPDATE
-                         text = VALUES(text), rating = VALUES(rating), time = VALUES(time), profile_photo_url = VALUES(profile_photo_url)`,
+                        `INSERT INTO google_reviews 
+                         (widget_id, author_name, rating, text, created_at, profile_photo_url)
+                         SELECT ?, ?, ?, ?, ?, ? FROM DUAL
+                         WHERE NOT EXISTS (
+                            SELECT 1 FROM google_reviews
+                            WHERE widget_id = ?
+                            AND author_name = ?
+                            AND created_at = ?
+                         )`,
                         [
-                            widget_id, review.author_name, review.rating, review.text, review.time,
-                            review.profile_photo_url || 'https://via.placeholder.com/50'
+                            widget_id, review.author_name, review.rating, review.text, reviewDate,
+                            review.profile_photo_url || 'https://via.placeholder.com/50',
+                            widget_id, review.author_name, reviewDate
                         ]
                     );
                 }
@@ -673,5 +811,81 @@ cron.schedule('0 2 * * 1', async () => {
     }
 });
 
+// ✅ Temporary endpoint to trigger the cron job for testing
+router.get('/trigger-cron', async (req, res) => {
+    console.log("🔄 Manual trigger: Fetching latest reviews from Google Places API...");
+
+    try {
+        const widgets = await db.query("SELECT id, business_id, user_id FROM widgets");
+
+        for (const widget of widgets) {
+            const place_id = widget.business_id;
+            const widget_id = widget.id;
+            const user_id = widget.user_id;
+
+            console.log(`🔍 Processing widget ID: ${widget_id} for user ID: ${user_id}`);
+            
+            // Create an API request record
+            await db.query(
+                "INSERT INTO api_requests (user_id, widget_id, request_type) VALUES (?, ?, ?)",
+                [user_id, widget_id, "google_places_details"]
+            );
+
+            const googleReviewsURL = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=reviews,rating,user_ratings_total&key=${process.env.GOOGLE_API_KEY}&language=sk`;
+
+            try {
+                const response = await axios.get(googleReviewsURL);
+                const data = response.data;
+
+                // Track API response size
+                const responseSize = JSON.stringify(data).length;
+                
+                // Update the request record with response size
+                await db.query(
+                    "UPDATE api_requests SET response_size = ?, status = 'completed' WHERE user_id = ? AND widget_id = ? ORDER BY created_at DESC LIMIT 1",
+                    [responseSize, user_id, widget_id]
+                );
+
+                if (data.result && data.result.reviews) {
+                    console.log(`✅ Found ${data.result.reviews.length} reviews for widget ID: ${widget_id}`);
+                    
+                    for (const review of data.result.reviews) {
+                        const reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+                        
+                        await db.query(
+                            `INSERT INTO google_reviews 
+                             (widget_id, author_name, rating, text, created_at, profile_photo_url)
+                             SELECT ?, ?, ?, ?, ?, ? FROM DUAL
+                             WHERE NOT EXISTS (
+                                SELECT 1 FROM google_reviews
+                                WHERE widget_id = ?
+                                AND author_name = ?
+                                AND created_at = ?
+                             )`,
+                            [
+                                widget_id, review.author_name, review.rating, review.text, reviewDate,
+                                review.profile_photo_url || 'https://via.placeholder.com/50',
+                                widget_id, review.author_name, reviewDate
+                            ]
+                        );
+                    }
+                }
+            } catch (apiError) {
+                console.error(`❌ API Error for widget ${widget_id}:`, apiError.message);
+                
+                // Update the request record with error status
+                await db.query(
+                    "UPDATE api_requests SET status = 'error' WHERE user_id = ? AND widget_id = ? ORDER BY created_at DESC LIMIT 1",
+                    [user_id, widget_id]
+                );
+            }
+        }
+        
+        res.json({ message: "✅ Cron job triggered successfully" });
+    } catch (error) {
+        console.error("❌ Error in manual cron trigger:", error);
+        res.status(500).json({ error: "Failed to trigger cron job" });
+    }
+});
 
 module.exports = router;

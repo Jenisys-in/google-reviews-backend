@@ -1,0 +1,360 @@
+{
+	"info": {
+		"_postman_id": "a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6",
+		"name": "Google Reviews API",
+		"description": "Collection for testing the Google Reviews API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Register User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"test@example.com\",\n    \"name\": \"Test User\",\n    \"company_name\": \"Test Company\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:5050/api/auth/register",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"auth",
+								"register"
+							]
+						},
+						"description": "Register a new user"
+					}
+				},
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"test@example.com\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:5050/api/auth/login",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"auth",
+								"login"
+							]
+						},
+						"description": "Login and get JWT token"
+					}
+				}
+			]
+		},
+		{
+			"name": "Widgets",
+			"item": [
+				{
+					"name": "Create Widget",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"user_id\": 1,\n    \"website_url\": \"https://example.com\",\n    \"business_id\": \"ChIJN1t_tDeuEmsRUsoyG83frY4\",\n    \"widget_name\": \"Example Widget\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:5050/api/widget/create",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"create"
+							]
+						},
+						"description": "Create a new widget"
+					}
+				},
+				{
+					"name": "Get User Widgets",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/widget/user-widgets/1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"user-widgets",
+								"1"
+							]
+						},
+						"description": "Get all widgets for a user"
+					}
+				},
+				{
+					"name": "Get Widget Dashboard",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/widget/dashboard/1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"dashboard",
+								"1"
+							]
+						},
+						"description": "Get dashboard data for a user's widgets"
+					}
+				},
+				{
+					"name": "Update Widget Settings",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"layout_type\": \"horizontal\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:5050/api/widget/update-settings/1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"update-settings",
+								"1"
+							]
+						},
+						"description": "Update widget settings (layout type)"
+					}
+				},
+				{
+					"name": "Fetch Widget Reviews",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/widget/fetch/1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"fetch",
+								"1"
+							]
+						},
+						"description": "Fetch reviews for a widget"
+					}
+				},
+				{
+					"name": "Get Widget JavaScript",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/widget/reviews.js?widget_id=1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"reviews.js"
+							],
+							"query": [
+								{
+									"key": "widget_id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Get the JavaScript code for embedding the widget"
+					}
+				},
+				{
+					"name": "Trigger Cron Job",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/widget/trigger-cron",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"widget",
+								"trigger-cron"
+							]
+						},
+						"description": "Manually trigger the cron job to fetch reviews and track API consumption"
+					}
+				}
+			]
+		},
+		{
+			"name": "Subscription",
+			"item": [
+				{
+					"name": "Check Subscription Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/subscription/status/1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"subscription",
+								"status",
+								"1"
+							]
+						},
+						"description": "Check subscription status for a user"
+					}
+				},
+				{
+					"name": "Handle Subscription Success",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"user_id\": 1,\n    \"website_url\": \"https://newsite.com\",\n    \"business_id\": \"ChIJN1t_tDeuEmsRUsoyG83frY4\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:5050/api/subscription/success",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"subscription",
+								"success"
+							]
+						},
+						"description": "Handle successful subscription payment"
+					}
+				}
+			]
+		},
+		{
+			"name": "API Consumption",
+			"item": [
+				{
+					"name": "Get All API Consumption",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/api_consumption/api-consumption",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"api_consumption",
+								"api-consumption"
+							]
+						},
+						"description": "Get API consumption for all users"
+					}
+				},
+				{
+					"name": "Get User API Consumption",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:5050/api/api_consumption/api-consumption/1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "5050",
+							"path": [
+								"api",
+								"api_consumption",
+								"api-consumption",
+								"1"
+							]
+						},
+						"description": "Get API consumption for a specific user"
+					}
+				}
+			]
+		}
+	]
+} 
