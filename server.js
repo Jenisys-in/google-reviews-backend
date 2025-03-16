@@ -19,6 +19,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Add a route for the root path
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Google Reviews API" });
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/widget", widgetRoutes);
 app.use("/api/subscription", subscriptionRoutes);

@@ -53,7 +53,7 @@ router.get("/fetch-google-reviews/:widget_id", async (req, res) => {
     try {
         const { widget_id } = req.params;
 
-        console.log(`🔍 Fetching Google reviews for Widget ID: ${widget_id}`);
+        console.log(`🔍 Fetching Google reviews via SERP API for Widget ID: ${widget_id}`);
 
         // Fetch widget details
         const [widget] = await db.query("SELECT * FROM widgets WHERE id = ?", [widget_id]);
@@ -68,36 +68,67 @@ router.get("/fetch-google-reviews/:widget_id", async (req, res) => {
             return res.status(400).json({ error: "❌ Business ID is missing." });
         }
 
-        // Fetch reviews from Google API
-        const googleAPIURL = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${business_id}&fields=reviews&key=${process.env.GOOGLE_API_KEY}`;
-        const response = await fetch(googleAPIURL);
-        const data = await response.json();
+        // Fetch reviews from SERP API
+        const serpApiURL = `https://serpapi.com/search.json`;
+        const searchParams = {
+            engine: "google_maps_reviews",
+            place_id: business_id,
+            hl: "sk",
+            sort_by: "ratingHigh",
+            api_key: process.env.SERP_API_KEY
+        };
 
-        console.log("✅ Google API Response:", data);
+        const response = await axios.get(serpApiURL, { params: searchParams });
+        const data = response.data;
 
-        if (!data.result || !data.result.reviews) {
-            return res.status(404).json({ error: "❌ No reviews found in Google API response." });
+        console.log("✅ SERP API Response received");
+
+        if (!data.reviews) {
+            return res.status(404).json({ error: "❌ No reviews found in SERP API response." });
         }
 
-        const reviews = data.result.reviews.map(review => ({
-            widget_id: widget_id,
-            author_name: review.author_name,
-            rating: review.rating,
-            text: review.text,
-            relative_time_description: review.relative_time_description
-        }));
+        // Map SERP API response to our database structure
+        const reviews = data.reviews.map(review => {
+            // Try to extract a timestamp if possible
+            let timestamp = null;
+            if (review.time) {
+                timestamp = review.time;
+            } else if (review.date) {
+                // If there's a date string but no timestamp, we'll use it as is
+                // The formatDate function will handle this
+            }
+            
+            return {
+                widget_id: widget_id,
+                author_name: review.user?.name || "Anonymous",
+                rating: review.rating || 0,
+                text: review.snippet || "",
+                relative_time_description: review.date || "",
+                profile_photo_url: review.user?.thumbnail || "",
+                time: timestamp
+            };
+        });
+        const sortedReviews = reviews.sort((a, b) => b.rating - a.rating);
 
         // Store reviews in the database
         for (let review of reviews) {
-            await db.query(
-                "INSERT INTO google_reviews (widget_id, author_name, rating, text, relative_time_description) VALUES (?, ?, ?, ?, ?)",
-                [review.widget_id, review.author_name, review.rating, review.text, review.relative_time_description]
+            // Check if review already exists to avoid duplicates
+            const [existingReview] = await db.query(
+                "SELECT id FROM google_reviews WHERE widget_id = ? AND author_name = ? AND text = ?",
+                [review.widget_id, review.author_name, review.text]
             );
+
+            if (!existingReview) {
+                await db.query(
+                    "INSERT INTO google_reviews (widget_id, author_name, rating, text, relative_time_description, profile_photo_url) VALUES (?, ?, ?, ?, ?, ?)",
+                    [review.widget_id, review.author_name, review.rating, review.text, review.relative_time_description, review.profile_photo_url]
+                );
+            }
         }
 
-        res.json({ message: "✅ Google reviews fetched successfully!", stored: true });
+        res.json({ message: "✅ Google reviews fetched successfully via SERP API!", stored: true });
     } catch (err) {
-        console.error("❌ Error fetching Google reviews:", err);
+        console.error("❌ Error fetching Google reviews via SERP API:", err);
         res.status(500).json({ error: "❌ Failed to fetch Google reviews." });
     }
 });
@@ -223,12 +254,12 @@ router.get('/reviews.js', async (req, res) => {
 
         // Fetch widget details from database
        // Fetch widget details from database
-const [widget] = await db.query('SELECT layout, business_id, user_id FROM widgets WHERE id = ?', [widget_id]);
+const [widget] = await db.query('SELECT layout_type, business_id, user_id FROM widgets WHERE id = ?', [widget_id]);
 if (!widget) return res.status(404).json({ error: 'Widget not found' });
 
         // Check if user has an active subscription
         const subscription = await db.query(
-            "SELECT * FROM subscriptions WHERE user_id = ? AND status = 'active' AND expires_at > NOW()",
+            "SELECT * FROM subscriptions WHERE user_id = ? AND plan = 'basic'",
             [widget.user_id]
         );
         
@@ -243,22 +274,21 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
         // ✅ Generate the correct Google Review Link dynamically
         const googleReviewLink = `https://search.google.com/local/writereview?placeid=${place_id}`;
 
-
-        
-
-        // Google Places API Request (Slovak Language Forced)
-        const googleAPIKey = process.env.GOOGLE_API_KEY;
-        const googleReviewsURL = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=reviews&review_sort=newest&key=${process.env.GOOGLE_API_KEY}&language=sk`;
-
-
-
         // Track API request
         await db.query(
             "INSERT INTO api_requests (user_id, widget_id, request_type) VALUES (?, ?, ?)",
             [widget.user_id, widget_id, "google_places_details"]
         );
 
-        const response = await axios.get(googleReviewsURL);
+        const searchParams = {
+            engine: "google_maps_reviews",
+            place_id: place_id,
+            hl: "sk",
+            sort_by: "ratingHigh",
+            api_key: process.env.SERP_API_KEY
+        };
+
+        const response = await axios.get("https://serpapi.com/search.json", { params: searchParams });
         const data = response.data;
 
         // Track API response size
@@ -268,40 +298,92 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
             [responseSize, widget.user_id, widget_id]
         );
 
-        if (!data.result || !data.result.reviews) {
+        if (!data.reviews) {
             return res.status(500).json({ error: 'No reviews found for this place' });
         }
 
-        const reviews = data.result.reviews
-    ? data.result.reviews
-        .filter(review => review.text.trim() !== "" && review.rating === 5) // Keep only 5-star reviews with text
-    : [];
+        // Map SERP API response to our database structure
+        const reviews = data.reviews.map(review => {
+            // Try to extract a timestamp if possible
+            let timestamp = null;
+            if (review.time) {
+                timestamp = review.time;
+            } else if (review.date) {
+                // If there's a date string but no timestamp, we'll use it as is
+                // The formatDate function will handle this
+            }
+            
+            return {
+                widget_id: widget_id,
+                author_name: review.user?.name || "Anonymous",
+                rating: review.rating || 0,
+                text: review.snippet || "",
+                relative_time_description: review.date || "",
+                profile_photo_url: review.user?.thumbnail || "",
+                time: timestamp
+            };
+        });
         const sortedReviews = reviews.sort((a, b) => b.rating - a.rating);
 
-        const overallRating = data.result.rating;
-        const totalReviews = data.result.user_ratings_total || 0;
+        const overallRating = data.place_info.rating;
+        const totalReviews = data.place_info.reviews || 0;
 
         console.log("✅ Reviews fetched:", reviews.length, "reviews found.");
+        
+        // Store the next_page_token for future pagination
+        const nextPageToken = data.next_page_token || null;
+        if (nextPageToken) {
+            console.log("✅ Next page token available:", nextPageToken);
+        }
 
 
         for (const review of reviews) {
-            const reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
-            console.log("📌 Inserting review:", review.author_name);
-            await db.query(
-                `INSERT INTO google_reviews (widget_id, author_name, rating, text, created_at, profile_photo_url)
-                 SELECT ?, ?, ?, ?, ?, ? FROM DUAL
-                 WHERE NOT EXISTS (
-                    SELECT 1 FROM google_reviews
-                    WHERE widget_id = ?
-                    AND author_name = ?
-                    AND created_at = ?
-                     )`,
-                [
-                    widget_id, review.author_name, review.rating, review.text, reviewDate,
-                    review.profile_photo_url || 'https://via.placeholder.com/50', // ✅ Default profile image if missing
-                    widget_id, review.author_name, reviewDate
-                ]
+            // Use current date if review.time is undefined or invalid
+            let reviewDate;
+            try {
+                // Check if review.time exists and is valid
+                if (review.time) {
+                    reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+                } else {
+                    // Try to parse the date string if available
+                    if (review.relative_time_description) {
+                        // Simple fallback - use current date
+                        reviewDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
+                    } else {
+                        // Default to current date
+                        reviewDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
+                    }
+                }
+            } catch (err) {
+                console.error("❌ Error parsing review date:", err);
+                // Default to current date if parsing fails
+                reviewDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            }
+            
+            console.log("📌 Checking review:", review.author_name);
+            
+            // Check if review already exists to avoid duplicates
+            const [existingReview] = await db.query(
+                `SELECT id FROM google_reviews 
+                 WHERE widget_id = ? 
+                 AND author_name = ? 
+                 AND text = ?`,
+                [widget_id, review.author_name, review.text]
             );
+
+            if (!existingReview) {
+                console.log("📌 Inserting new review:", review.author_name);
+                await db.query(
+                    `INSERT INTO google_reviews (widget_id, author_name, rating, text, created_at, profile_photo_url)
+                     VALUES (?, ?, ?, ?, ?, ?)`,
+                    [
+                        widget_id, review.author_name, review.rating, review.text, reviewDate,
+                        review.profile_photo_url || 'https://via.placeholder.com/50'
+                    ]
+                );
+            } else {
+                console.log("📌 Skipping existing review:", review.author_name);
+            }
         }
         // ✅ Define tab navigation as an empty string by default
 let tabNavigation = "";
@@ -347,9 +429,17 @@ const googleReviewLink = "${googleReviewLink}";
 
 
                 function formatDate(timestamp) {
-                    return new Date(timestamp * 1000).toLocaleDateString('en-GB', {
-                        day: '2-digit', month: 'long', year: 'numeric'
-                    });
+                    if (!timestamp) {
+                        return "Recently"; // Default text for missing timestamps
+                    }
+                    try {
+                        return new Date(timestamp * 1000).toLocaleDateString('en-GB', {
+                            day: '2-digit', month: 'long', year: 'numeric'
+                        });
+                    } catch (err) {
+                        console.error("Error formatting date:", err);
+                        return "Recently"; // Fallback for invalid dates
+                    }
                 }
 
                 window.toggleReadMore = function(event) {
@@ -369,11 +459,32 @@ const googleReviewLink = "${googleReviewLink}";
 
 
                 window.loadMoreReviews = function() {
-                    document.querySelectorAll(".review.hidden").forEach(review => review.classList.remove("hidden"));
-                    document.querySelector(".load-more-btn").style.display = "none";
+                    const hiddenReviews = document.querySelectorAll(".review.hidden");
+                    
+                    // If there are hidden reviews, show them first
+                    if (hiddenReviews.length > 0) {
+                        hiddenReviews.forEach(review => review.classList.remove("hidden"));
+                    } 
+                    // If no hidden reviews or we've shown them all, fetch more with next_page_token
+                    else if (window.nextPageToken) {
+                        const currentScript = document.currentScript || document.querySelector('script[src*="reviews.js"]');
+                        const widgetId = new URLSearchParams(currentScript.src.split('?')[1]).get('widget_id');
+                        
+                        // Create a new script element to fetch more reviews
+                        const newScript = document.createElement('script');
+                        newScript.src = \`\${currentScript.src.split('?')[0]}?widget_id=\${widgetId}&next_page_token=\${window.nextPageToken}&num=10\`;
+                        document.body.appendChild(newScript);
+                        
+                        // Show loading state
+                        document.querySelector(".load-more-btn").innerText = "Loading...";
+                    } else {
+                        // No more reviews to load
+                        document.querySelector(".load-more-btn").style.display = "none";
+                    }
                 };
 
-               
+                // Store next_page_token for pagination
+                window.nextPageToken = "${nextPageToken || ''}";
 
                 let container = document.createElement('div');
                 container.classList.add('review-widget');
@@ -684,7 +795,7 @@ function openGoogleReview(event) {
                                     <div class="review-stars">\${generateStars(review.rating)}</div>
                                     <p class="review-text \${review.text.length > 150 ? 'long' : ''}">\${review.text}</p>
                                   <span class="read-more" onclick="toggleReadMore(event)">Čítať viac...</span>
-                                    <span class="review-date">\${formatDate(review.time)}</span>
+                                    <span class="review-date">\${review.time ? formatDate(review.time) : (review.relative_time_description || 'Recently')}</span>
                                 </div>
                             </div>
                         \`).join('')}
@@ -701,7 +812,7 @@ function openGoogleReview(event) {
                                     <div class="review-stars">\${generateStars(review.rating)}</div>
                                     <p class="review-text \${review.text.length > 150 ? 'long' : ''}">\${review.text}</p>
                                     <span class="read-more" onclick="toggleReadMore(event)">Čítať viac...</span>
-                                    <span class="review-date">\${formatDate(review.time)}</span>
+                                    <span class="review-date">\${review.time ? formatDate(review.time) : (review.relative_time_description || 'Recently')}</span>
                                 </div>
                             </div>
                         \`).join('')}
