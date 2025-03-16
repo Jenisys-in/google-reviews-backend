@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    container_name: node_backend
+    build: .
+    ports:
+      - "5050:5050"
+    env_file:
+      - .env
+    volumes:
+      - .:/usr/src/app
+    depends_on:
+      - mariadb
+    restart: always
+
+  mariadb:
+    image: mariadb:latest
+    container_name: mariadb_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: my-secret-pw
+      MYSQL_DATABASE: google_reviews
+      MYSQL_USER: root
+      MYSQL_PASSWORD: my-secret-pw
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+volumes:
+  mariadb_data:
