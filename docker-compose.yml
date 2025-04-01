@@ -5,7 +5,7 @@ services:
     container_name: node_backend
     build: .
     ports:
-      - "5050:5050"
+      - "5051:5051"
     env_file:
       - .env
     volumes:
