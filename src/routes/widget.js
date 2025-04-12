@@ -240,6 +240,57 @@ router.get("/dashboard/:user_id", async (req, res) => {
     }
 });
 
+
+function estimateExactDate(relativeString) {
+    const now = new Date();
+    if (!relativeString || typeof relativeString !== 'string') return now;
+  
+    // Translate Slovak phrases to English
+    relativeString = relativeString
+      .replace('pred ', '') // remove "pred" = "ago"
+      .replace('mesiacmi', 'months')
+      .replace('mes.', 'months')
+      .replace('rokmi', 'years')
+      .replace('rokom', 'year')
+      .replace('týždňami', 'weeks')
+      .replace('dňami', 'days')
+      .replace('deň', '1 day')
+      .replace('dnami', 'days');
+  
+    // Convert "a year ago" or "an hour ago" → "1 year ago"
+    relativeString = relativeString
+      .replace(/^a /, '1 ')
+      .replace(/^an /, '1 ')
+      .replace(/^yesterday$/, '1 day')
+      .replace(/^today$/, '0 day');
+  
+    const [amount, unitRaw] = relativeString.trim().split(' ');
+    const unit = unitRaw?.toLowerCase().replace(/s$/, '');
+    const num = parseInt(amount);
+  
+    if (isNaN(num)) return now;
+  
+    switch (unit) {
+      case 'year':
+        now.setFullYear(now.getFullYear() - num);
+        break;
+      case 'month':
+        now.setMonth(now.getMonth() - num);
+        break;
+      case 'week':
+        now.setDate(now.getDate() - num * 7);
+        break;
+      case 'day':
+        now.setDate(now.getDate() - num);
+        break;
+      default:
+        return now;
+    }
+  
+    return now;
+  }
+  
+  
 router.get('/reviews.js', async (req, res) => {
     try {
         const { widget_id } = req.query;
@@ -247,9 +298,14 @@ router.get('/reviews.js', async (req, res) => {
 
 
         const referer = req.get('Referer') || "";
-        const isClientWebsite = referer.includes("toprecenzie.sk"); // Change to actual domain
+        let isHomepage = false;
 
-        console.log("Referer:", referer, "→ isClientWebsite:", isClientWebsite);
+        try {
+            const url = new URL(referer);
+            isHomepage = url.hostname.includes("toprecenzie.sk") && (url.pathname === "/" || url.pathname === "");
+        } catch (err) {
+            console.warn("Invalid referer URL:", referer);
+        }
 
 
         // Fetch widget details from database
@@ -266,7 +322,7 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
         const hasActiveSubscription = subscription.length > 0;
         
         const layout_type = widget.layout_type || 'vertical'; // Fetch the layout from database
-        const initialView = isClientWebsite ? 'vertical' : layout_type; // Show both layouts on client site
+        const initialView = isHomepage ? 'vertical' : layout_type; // Show both layouts on client site
         
 
         const place_id = widget.business_id; // Retrieve Google Place ID from database
@@ -289,29 +345,53 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
         };
 
         // ✅ Check if 5-star reviews already exist in DB
-const [rows] = await db.query(
-    "SELECT * FROM google_reviews WHERE widget_id = ? AND rating = 5",
-    [widget_id]
-  );
+        let rows = [];
+        try {
+          const result = await db.query(
+            "SELECT * FROM google_reviews WHERE widget_id = ? AND rating = 5",
+            [widget_id]
+          );
+          rows = Array.isArray(result[0]) ? result[0] : [];
+        } catch (err) {
+          console.error("❌ Error fetching DB rows:", err);
+        }
+        
   
   let reviews = [];
   
   if (rows.length > 0) {
     console.log("✅ Using cached 5-star reviews from DB");
   
-    reviews = rows.map((r) => ({
-      widget_id: r.widget_id,
-      author_name: r.author_name,
-      rating: r.rating,
-      text: r.text,
-      relative_time_description: new Date(r.created_at).toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric'
-      }),
-      profile_photo_url: r.profile_photo_url,
-      time: new Date(r.created_at).getTime() / 1000,
-    }));
+    reviews = rows.map((r) => {
+        const createdAtRaw = r.created_at;
+        let formattedDate = '';
+      
+        try {
+          const parsedDate = new Date(createdAtRaw.replace(' ', 'T'));
+          if (!isNaN(parsedDate)) {
+            formattedDate = parsedDate.toLocaleDateString('en-GB', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric'
+            });
+          } else {
+            console.warn("⚠️ Invalid date format from DB:", createdAtRaw);
+          }
+        } catch (err) {
+          console.error("❌ Error formatting date:", err);
+        }
+      
+        return {
+          widget_id: r.widget_id,
+          author_name: r.author_name,
+          rating: r.rating,
+          text: r.text,
+          relative_time_description: formattedDate,
+          profile_photo_url: r.profile_photo_url,
+          time: new Date(createdAtRaw.replace(' ', 'T')).getTime() / 1000
+        };
+      });
+      
   
     overallRating = 5;
     totalReviews = reviews.length;
@@ -319,8 +399,15 @@ const [rows] = await db.query(
   } else {
     console.log("🚀 Fetching fresh reviews from SerpAPI");
   
-    const response = await axios.get("https://serpapi.com/search.json", { params: searchParams });
-    const data = response.data;
+    let data;
+    try {
+      const response = await axios.get("https://serpapi.com/search.json", { params: searchParams });
+      data = response.data;
+    } catch (err) {
+      console.error("❌ SerpAPI call failed:", err);
+      return res.status(500).json({ error: "SerpAPI request failed" });
+    }
+    
   
     // Track API response size
     const responseSize = JSON.stringify(data).length;
@@ -335,15 +422,22 @@ const [rows] = await db.query(
   
     const fiveStarReviews = data.reviews.filter(r => r.rating === 5);
   
-     reviews = fiveStarReviews.map(review => {
-        const timestamp = review.time || null;
-        const formattedDate = timestamp
-          ? new Date(timestamp * 1000).toLocaleDateString('en-GB', {
-              day: '2-digit',
-              month: 'short',
-              year: 'numeric'
-            })
-          : '';
+    reviews = fiveStarReviews.map(review => {
+        let reviewDate;
+      
+        if (review.time) {
+          reviewDate = new Date(review.time * 1000);
+        } else if (review.date) {
+          reviewDate = estimateExactDate(review.date);
+        } else {
+          reviewDate = new Date(); // fallback
+        }
+      
+        const formattedDate = reviewDate.toLocaleDateString('en-GB', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric'
+        });
       
         return {
           widget_id: widget_id,
@@ -352,13 +446,13 @@ const [rows] = await db.query(
           text: review.snippet || "",
           relative_time_description: formattedDate,
           profile_photo_url: review.user?.thumbnail || "",
-          time: timestamp
+          time: Math.floor(reviewDate.getTime() / 1000)
         };
       });
       
   
     overallRating = data.place_info?.rating || 5;
-    totalReviews = fiveStarReviews.length;
+    totalReviews = data.place_info.reviews || 0;
     nextPageToken = data.next_page_token || null;
   
     console.log("✅ 5-star Reviews fetched:", reviews.length);
@@ -398,14 +492,7 @@ const [rows] = await db.query(
         // ✅ Define tab navigation as an empty string by default
 let tabNavigation = "";
 
-if (isClientWebsite) {
-    tabNavigation = `
-        <div class="tabs">
-            <button id="tab-vertical" class="tab active" onclick="switchTab('vertical')">Comments Vertically</button>
-            <button id="tab-horizontal" class="tab" onclick="switchTab('horizontal')">Comments Horizontally</button>
-        </div>
-    `;
-}
+
 
 
 
@@ -431,9 +518,11 @@ if (isClientWebsite) {
 
 
 
-const isClientWebsite = ${JSON.stringify(isClientWebsite)};
+const isHomepage = window.location.hostname.includes("toprecenzie.sk") && 
+                   (window.location.pathname === "/" || window.location.pathname === "");
 
-                console.log("isClientWebsite in frontend:", isClientWebsite);
+
+                console.log("isHomepage in frontend:", isHomepage);
 
 const googleReviewLink = "${googleReviewLink}";
 
@@ -620,20 +709,21 @@ width: calc(100% - 20px) !important;
                         font-weight: bold;
                     }
                     .leave-review-btn {
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        background: #4285F4;
-                        color: white;
-                        text-align: center;
-                        padding: 10px;
-                        border-radius: 5px;
-                        margin-top: 10px;
-                        text-decoration: none;
-                        width: 250px;
-                        margin: 0;
-                        font-weight: bold;
-                    }
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #4285F4;
+    color: white;
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 16px;
+    padding: 10px 20px;
+    border-radius: 999px;
+    white-space: nowrap;
+    gap: 8px;
+    max-width: 100%;
+}
+
                     .leave-review-btn img {
                         width: 20px;
                         height: 20px;
@@ -765,6 +855,19 @@ margin: auto;
 
                                let reviewsData = ${JSON.stringify(reviews)};
 
+                               const isHomepage = window.location.hostname.includes("toprecenzie.sk") && 
+                   (window.location.pathname === "/" || window.location.pathname === "");
+
+let tabNavigationHTML = "";
+if (isHomepage) {
+    tabNavigationHTML = \`
+        <div class="tabs">
+            <button id="tab-vertical" class="tab active" onclick="switchTab('vertical')">Comments Vertically</button>
+            <button id="tab-horizontal" class="tab" onclick="switchTab('horizontal')">Comments Horizontally</button>
+        </div>
+    \`;
+}
+
                                console.log("✅ Review dates:", reviewsData.map(r => r.relative_time_description));
 
 
@@ -794,7 +897,7 @@ function openGoogleReview(event) {
                     <!-- Tab Navigation -->
 
        
-                    ${tabNavigation}
+                    ${tabNavigationHTML}
 
 
  <!-- Vertical Reviews Section -->
@@ -870,7 +973,7 @@ function openGoogleReview(event) {
 
 
                 
-                window.switchTab('${initialView}');
+                window.switchTab(isHomepage ? 'vertical' : '${layout_type}');
             })();
         `;
 
@@ -885,7 +988,7 @@ function openGoogleReview(event) {
 
 
 
-cron.schedule('*/30 * * * *', async () => { // Runs every 30 minutes
+cron.schedule('0 0 * * 1', async () => { // Runs every 30 minutes
     console.log("🔄 Running Cron Job: Fetching new 5-star reviews...");
     
     try {
