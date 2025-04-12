@@ -43,7 +43,7 @@ project-root/ ├── wp-admin-plugin/ # Google Reviews Widget Admin (WordPres
 - Copy plugin folder into `wp-content/plugins/google-reviews-widget-admin/`
 - Update DB connection:
   ```php
-  $hetzner_db = new wpdb('root', 'Toprecenzie', 'google_reviews', '128.140.124.88');
+  
 Activate from WordPress admin
 2. Node.js Backend API
 Located at: https://api.toprecenzie.sk/api/widget/reviews.js
