@@ -518,7 +518,7 @@ let tabNavigation = "";
 
 
 
-const isHomepage = window.location.hostname.includes("toprecenzie.sk") && 
+let isHomepage = window.location.hostname.includes("toprecenzie.sk") && 
                    (window.location.pathname === "/" || window.location.pathname === "");
 
 
@@ -855,7 +855,7 @@ margin: auto;
 
                                let reviewsData = ${JSON.stringify(reviews)};
 
-                               const isHomepage = window.location.hostname.includes("toprecenzie.sk") && 
+                               let isHomepage = window.location.hostname.includes("toprecenzie.sk") &&
                    (window.location.pathname === "/" || window.location.pathname === "");
 
 let tabNavigationHTML = "";
@@ -867,6 +867,7 @@ if (isHomepage) {
         </div>
     \`;
 }
+
 
                                console.log("✅ Review dates:", reviewsData.map(r => r.relative_time_description));
 
@@ -897,7 +898,7 @@ function openGoogleReview(event) {
                     <!-- Tab Navigation -->
 
        
-                    ${tabNavigationHTML}
+                    \${tabNavigationHTML}
 
 
  <!-- Vertical Reviews Section -->
