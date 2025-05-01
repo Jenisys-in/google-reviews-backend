@@ -346,16 +346,19 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
 
         // ✅ Check if 5-star reviews already exist in DB
         let rows = [];
-        try {
-          const result = await db.query(
-            "SELECT * FROM google_reviews WHERE widget_id = ? AND rating = 5",
-            [widget_id]
-          );
-          rows = Array.isArray(result[0]) ? result[0] : [];
-        } catch (err) {
-          console.error("❌ Error fetching DB rows:", err);
-        }
-        
+try {
+  const result = await db.query(
+    "SELECT * FROM google_reviews WHERE widget_id = ? AND rating = 5",
+    [widget_id]
+  );
+
+  // Handle both MySQL2 (returns [rows, fields]) and other clients
+  rows = Array.isArray(result[0]) ? result[0] : result;
+
+  console.log("✅ Cached reviews found:", rows.length);
+} catch (err) {
+  console.error("❌ Error fetching DB rows:", err);
+}
   
   let reviews = [];
   
@@ -364,16 +367,20 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
   
     reviews = rows.map((r) => {
         const createdAtRaw = r.created_at;
+        console.log("🕒 created_at raw:", createdAtRaw);
+      
         let formattedDate = '';
+        let timestamp = null;
       
         try {
-          const parsedDate = new Date(createdAtRaw.replace(' ', 'T'));
+          const parsedDate = new Date(createdAtRaw);
           if (!isNaN(parsedDate)) {
             formattedDate = parsedDate.toLocaleDateString('en-GB', {
               day: '2-digit',
               month: 'short',
               year: 'numeric'
             });
+            timestamp = parsedDate.getTime() / 1000;
           } else {
             console.warn("⚠️ Invalid date format from DB:", createdAtRaw);
           }
@@ -388,7 +395,7 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
           text: r.text,
           relative_time_description: formattedDate,
           profile_photo_url: r.profile_photo_url,
-          time: new Date(createdAtRaw.replace(' ', 'T')).getTime() / 1000
+          time: timestamp || Math.floor(Date.now() / 1000) // fallback
         };
       });
       
@@ -432,6 +439,8 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
         } else {
           reviewDate = new Date(); // fallback
         }
+        
+
       
         const formattedDate = reviewDate.toLocaleDateString('en-GB', {
           day: '2-digit',
@@ -458,17 +467,9 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
     console.log("✅ 5-star Reviews fetched:", reviews.length);
   
     for (const review of reviews) {
-      let reviewDate;
-      try {
-        if (review.time) {
-          reviewDate = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
-        } else {
-          reviewDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        }
-      } catch (err) {
-        console.error("❌ Error parsing review date:", err);
-        reviewDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
-      }
+
+        const reviewDateFormatted = new Date(review.time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+
   
       const [existingReview] = await db.query(
         `SELECT id FROM google_reviews 
@@ -481,7 +482,7 @@ if (!widget) return res.status(404).json({ error: 'Widget not found' });
         await db.query(
           `INSERT INTO google_reviews (widget_id, author_name, rating, text, created_at, profile_photo_url)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [widget_id, review.author_name, review.rating, review.text, reviewDate, review.profile_photo_url || 'https://via.placeholder.com/50']
+          [widget_id, review.author_name, review.rating, review.text, reviewDateFormatted, review.profile_photo_url || 'https://via.placeholder.com/50']
         );
       } else {
         console.log("📌 Skipping existing 5-star review:", review.author_name);
@@ -817,33 +818,88 @@ margin :auto;
 }
 
 /* Horizontal Scrolling */
+
 .horizontal-reviews-container {
-    display: flex; /* Initially hidden */
-    flex-wrap: nowrap;
-max-width: 100%;
-width: calc(100% - 20px);
-margin: auto;
-    overflow-x: auto;
-    scroll-snap-type: x mandatory;
-    gap: 10px;
-    padding: 10px;
+  display: flex;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 16px; /* for start/end spacing */
+  gap: 16px;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+  padding: 0; /* REMOVE padding to avoid overflow */
 }
 
-.horizontal-reviews-container::-webkit-scrollbar {
-    height: 8px;
-}
-
-.horizontal-reviews-container::-webkit-scrollbar-thumb {
-    background-color: #ccc;
-    border-radius: 10px;
-}
-
-/* Each review should snap while scrolling */
 .horizontal-reviews-container .review {
-    flex: 0 0 auto;
-    width: 300px;
-    scroll-snap-align: start;
+  flex: 0 0 auto;
+  width: 300px;
+  scroll-snap-align: start;
+  box-sizing: border-box;
 }
+
+.horizontal-reviews-container .review:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.3s ease;
+}
+
+/* Scrollbar */
+.horizontal-reviews-container::-webkit-scrollbar {
+  height: 8px;
+}
+.horizontal-reviews-container::-webkit-scrollbar-thumb {
+  background-color: #ccc;
+  border-radius: 10px;
+}
+
+@media (max-width: 400px) {
+  .horizontal-reviews-container {
+    padding: 0;
+    scroll-padding: 0 12px;
+    gap: 12px;
+  }
+
+  .horizontal-reviews-container .review {
+    width: 88vw;
+    max-width: 260px;
+    font-size: 13px; /* scale down */
+    padding: 12px 10px;
+  }
+
+  .review-header {
+    font-size: 1em;
+  }
+
+  .review-text {
+    font-size: 13px;
+  }
+
+  .review-date {
+    font-size: 11px;
+  }
+
+  .leave-review-btn,
+  .load-more-btn {
+    font-size: 13px;
+    padding: 8px 16px;
+  }
+
+  .review-widget {
+  padding: 20px;
+}
+  .review-photo {
+    width: 40px;
+    height: 40px;
+  }
+
+  .star {
+    font-size: 18px;
+  }
+}
+
+
 
 
                 \`;
@@ -945,7 +1001,7 @@ function openGoogleReview(event) {
 
                 \`;
 
-                document.currentScript.parentNode.insertBefore(container, document.currentScript);
+                
 
                 let verticalReviews = document.createElement('div');
                 verticalReviews.id = 'vertical-reviews';
@@ -957,7 +1013,14 @@ function openGoogleReview(event) {
 
                 container.appendChild(verticalReviews);
                 container.appendChild(horizontalReviews);
-                document.currentScript.parentNode.insertBefore(container, document.currentScript);
+
+                // ✅ Inject only once, safely
+(() => {
+  const containerId = document.currentScript.getAttribute("data-container");
+  const target = containerId ? document.getElementById(containerId) : document.currentScript.parentNode;
+  target.appendChild(container);
+})();
+               
                 
                 // ✅ Ensure the correct layout is displayed initially
                 window.switchTab = function(tabName) {
